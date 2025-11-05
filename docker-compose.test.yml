@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # Test connection to PostgreSQL on host system
+  postgres-host-test:
+    image: postgres:15-alpine
+    container_name: postgres-host-test
+    command: >
+      sh -c "
+      echo 'Testing connection to PostgreSQL on host system...' &&
+      apk add --no-cache postgresql-client &&
+      echo 'Trying host.docker.internal:5432...' &&
+      pg_isready -h host.docker.internal -p 5432 -U bagetter_user -d bagetter_stable &&
+      echo 'host.docker.internal works!' ||
+      (echo 'host.docker.internal failed, trying 172.17.0.1...' &&
+      pg_isready -h 172.17.0.1 -p 5432 -U bagetter_user -d bagetter_stable &&
+      echo '172.17.0.1 works!') ||
+      (echo 'Both failed, trying gateway IP...' &&
+      GATEWAY=\$$(ip route | grep default | awk '{print \$$3}') &&
+      echo \"Gateway IP: \$$GATEWAY\" &&
+      pg_isready -h \$$GATEWAY -p 5432 -U bagetter_user -d bagetter_stable) ||
+      echo 'All connection attempts failed!' &&
+      sleep 5
+      "
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    network_mode: bridge
+
+  # Test with PostgreSQL in container (working reference)
+  postgres-container:
+    image: postgres:15-alpine
+    container_name: postgres-container-test
+    environment:
+      POSTGRES_DB: bagetter_stable
+      POSTGRES_USER: bagetter_user
+      POSTGRES_PASSWORD: E1uLlt7tDeJLZx4J88BgYfeTi2aHzo+Q69DN1c+30S8=
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bagetter_user -d bagetter_stable"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Test connection to containerized PostgreSQL
+  postgres-container-test:
+    image: postgres:15-alpine
+    container_name: postgres-container-test-client
+    depends_on:
+      postgres-container:
+        condition: service_healthy
+    command: >
+      sh -c "
+      echo 'Testing connection to PostgreSQL in container...' &&
+      apk add --no-cache postgresql-client &&
+      PGPASSWORD='E1uLlt7tDeJLZx4J88BgYfeTi2aHzo+Q69DN1c+30S8=' psql -h postgres-container -U bagetter_user -d bagetter_stable -c 'SELECT version();' &&
+      echo 'Container connection successful!' ||
+      echo 'Container connection failed!' &&
+      sleep 5
+      "
+
+volumes:
+  postgres-test-data:
